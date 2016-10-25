@@ -1,0 +1,45 @@
+#                            -*- mode: org; -*-
+#
+#+TITLE:     README for [[http://openfoam.org/download/source][OpenFOAM-Intel]]
+#+AUTHOR:               The OpenFOAM Foundation
+#+DATE:                     25th October 2016
+#+LINK:                  http://openfoam.org
+#+OPTIONS: author:nil ^:{}
+# Copyright (c) 2016 OpenFOAM Foundation.
+
+* About OpenFOAM
+  OpenFOAM is a free, open source computational fluid dynamics (CFD) software
+  package released by the OpenFOAM Foundation. It has a large user base across
+  most areas of engineering and science, from both commercial and academic
+  organisations. OpenFOAM has an extensive range of features to solve anything
+  from complex fluid flows involving chemical reactions, turbulence and heat
+  transfer, to solid dynamics and electromagnetics.
+
+* Copyright
+  OpenFOAM is free software: you can redistribute it and/or modify it under the
+  terms of the GNU General Public License as published by the Free Software
+  Foundation, either version 3 of the License, or (at your option) any later
+  version.  See the file =COPYING= in this directory or
+  [[http://www.gnu.org/licenses/]], for a description of the GNU General Public
+  License terms under which you can copy the files.
+
+* Intel Developments
+  This repository contains processor-specific developments contributed by Intel
+  to the OpenFOAM Foundation that are being evaluated and not yet included the
+  main OpenFOAM-dev repository.
+
+  This work includes developments for the new Intel Xeon Phi processor
+  code-named Knights Landing (KNL).  The =libhbm= is a library that can be
+  pre-loaded when the KNL is running in flat-memory mode.  This will wrap memory
+  allocation/deallocation functions and selectively (based on a user specified
+  threshold) decide whether to use the MCDRAM or DDR memory.  Updated versions
+  of the Gauss-Seidel solvers are also included which improve performance on the
+  KNL platform.
+
+  A modified version of the simpleFoam motorbike tutorial with scripts to scale
+  the mesh size is also included.  This provides a reproducible method for
+  re-running results shown by Intel.
+
+* [[http://OpenFOAM.org/bugs][Reporting bugs in OpenFOAM]]
+
+* [[http://openfoam.org/contact][Contacting the OpenFOAM Foundation]]
