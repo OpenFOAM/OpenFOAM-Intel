@@ -1,0 +1,43 @@
+diff --git a/src/OpenFOAM/primitives/MatrixSpace/MatrixSpace.H b/src/OpenFOAM/primitives/MatrixSpace/MatrixSpace.H
+index f06874f..4e47c92 100644
+--- a/src/OpenFOAM/primitives/MatrixSpace/MatrixSpace.H
++++ b/src/OpenFOAM/primitives/MatrixSpace/MatrixSpace.H
+@@ -172,7 +172,15 @@ public:
+                     SubTensor::mRows,
+                     SubTensor::nCols
+                 >& matrix
+-            );
++            ){
++    for (direction i=0; i<mRows; ++i)
++    {
++        for (direction j=0; j<nCols; ++j)
++        {
++            operator()(i,j) = matrix(i,j);
++        }
++    }
++}
+ 
+             //- Assignment to a column vector
+             template<class VSForm>
+diff --git a/src/OpenFOAM/primitives/MatrixSpace/MatrixSpaceI.H b/src/OpenFOAM/primitives/MatrixSpace/MatrixSpaceI.H
+index 207162b..3fc46dd 100644
+--- a/src/OpenFOAM/primitives/MatrixSpace/MatrixSpaceI.H
++++ b/src/OpenFOAM/primitives/MatrixSpace/MatrixSpaceI.H
+@@ -482,7 +482,7 @@ inline void Foam::MatrixSpace<Form, Cmpt, Mrows, Ncols>::operator=
+     }
+ }
+ 
+-
++#if 0
+ template<class Form, class Cmpt, Foam::direction Mrows, Foam::direction Ncols>
+ template<class SubTensor, Foam::direction BRowStart, Foam::direction BColStart>
+ template<class Form2>
+@@ -502,7 +502,7 @@ operator=
+         }
+     }
+ }
+-
++#endif
+ 
+ template<class Form, class Cmpt, Foam::direction Mrows, Foam::direction Ncols>
+ template<class SubTensor, Foam::direction BRowStart, Foam::direction BColStart>

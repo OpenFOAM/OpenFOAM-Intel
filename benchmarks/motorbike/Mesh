@@ -1,0 +1,31 @@
+#!/bin/sh
+cd ${0%/*} || exit 1    # run from this directory
+
+NX=$1
+NY=$2
+NZ=$3
+
+NPROCS=16
+
+echo "Setting up with $NPROCS procs.  Blockmesh size = $NX x $NY x $NZ"
+
+sed "s/NX/$NX/g;s/NY/$NY/g;s/NZ/$NZ/g" system/blockMeshDict-mesh.in > constant/polyMesh/blockMeshDict
+cp system/decomposeParDict-mesh.in system/decomposeParDict
+
+# Source tutorial run functions
+. $WM_PROJECT_DIR/bin/tools/RunFunctions
+
+# copy motorbike surface from resources directory
+cp $FOAM_TUTORIALS/resources/geometry/motorBike.obj.gz constant/triSurface/
+runApplication surfaceFeatureExtract
+
+runApplication blockMesh
+
+runApplication decomposePar
+runParallel snappyHexMesh -overwrite
+
+runApplication reconstructParMesh -constant
+rm -rf processor*
+
+runApplication renumberMesh -constant -overwrite
+

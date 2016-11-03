@@ -1,0 +1,13 @@
+#!/bin/sh
+cd ${0%/*} || exit 1    # run from this directory
+
+# Source tutorial run functions
+. $WM_PROJECT_DIR/bin/tools/RunFunctions
+
+# NOTE: To launch without the runParallel, do the following:
+#
+#           mpirun -np $NPROCS simpleFoam -parallel
+#
+runParallel simpleFoam
+
+# ----------------------------------------------------------------- end-of-file

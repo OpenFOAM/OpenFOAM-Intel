@@ -1,0 +1,27 @@
+#!/bin/sh
+cd ${0%/*} || exit 1    # run from this directory
+
+NPROCS=$1
+
+echo "Running with $NPROCS procs."
+
+rm -f log.*
+rm -rf processor*
+
+sed "s/NPROCS/$NPROCS/g" system/decomposeParDict-solve.in > system/decomposeParDict
+
+# Source tutorial run functions
+. $WM_PROJECT_DIR/bin/tools/RunFunctions
+
+runApplication decomposePar
+
+#- For non-parallel running
+#cp -r 0.org 0 > /dev/null 2>&1
+
+#- For parallel running
+ls -d processor* | xargs -I {} rm -rf ./{}/0
+ls -d processor* | xargs -I {} cp -r 0.org ./{}/0
+
+runParallel potentialFoam
+
+# ----------------------------------------------------------------- end-of-file
