@@ -1,6 +1,6 @@
 
 GaussSeidelKNL/GaussSeidelSmootherKNL.C
-symGaussSeidelKNL/symGaussSeidelSmoother.C
+symGaussSeidelKNL/symGaussSeidelSmootherKNL.C
 
 LIB = $(FOAM_USER_LIBBIN)/libKNL
 

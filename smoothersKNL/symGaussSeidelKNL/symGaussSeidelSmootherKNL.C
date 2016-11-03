@@ -66,7 +66,11 @@ inline void gs_impl(
     psii *= diagRcpPtr[celli];
 
     // Distribute the neighbour side using psi for this cell
+#ifdef __INTEL_COMPILER
     #pragma ivdep
+#else
+    #pragma GCC ivdep
+#endif
     for (Foam::label i=0; i<len; i++)
     {
         bPrimePtr[uPtr[fStart+i]] -= lowerPtr[fStart+i]*psii;
