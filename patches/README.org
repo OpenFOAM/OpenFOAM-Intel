@@ -1,0 +1,16 @@
+* Patches
+
+This contains any patches for the OpenFOAM-dev repository that have not (or may never) be included.
+
+|----------------------------------------------------------------------+------------------------------------------------|
+| Name                                                                 | Description                                    |
+|----------------------------------------------------------------------+------------------------------------------------|
+| [[Intel Compiler 2017 patch][file:OpenFOAM_IntelCompiler2017.patch]] | Patch for template bug in Intel Compiler 2017. |
+|----------------------------------------------------------------------+------------------------------------------------|
+
+A patch can be applied as follows:
+
+#+begin_src bash
+cd /path/to/OpenFOAM-dev
+patch -p0 < /patch/to/apply
+#+end_src
