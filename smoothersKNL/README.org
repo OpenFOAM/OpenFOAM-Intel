@@ -1,0 +1,12 @@
+* Updated smoothers for KNL
+
+This contains two new versions of the GaussSeidel and symGaussSeidel smoother which have a better performance on the KNL.  The optimisations include swapping a divide in the inner loop for a multication by a pre-calculated reciprocal and creating a separate code path for cells with a different number of faces.  These new smoothers can be used instead of the existing ones by compiling and then post-fixing the smoother with "KNL" in the configuration files.
+
+** Compilation
+
+First, source the OpenFOAM environment and, then, simply =wmake= in this directory.  A new library, =libKNL.so=, will be put in the =FOAM_LIBBIN= directory.
+
+** Usage
+
+The additional library will need to be included in the =system/controlDict=.  Here, ="libKNL.so"= needs to be appended to the =libs= list.  Next, look in =system/fvSolution= and replace any occurances of =GaussSeidel= with =GaussSeidelKNL=, and =symGaussSeidel= with =symGaussSeidelKNL=.  Finally, run as usual.
+
