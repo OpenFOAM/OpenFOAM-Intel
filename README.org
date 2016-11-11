@@ -35,7 +35,7 @@
   following:
   
   | [[libhbm/README.org][libhbm]] | A wrapper library for handling high bandwidth memory when running in flat memory mode on the KNL. |
-  | [[smoothersKNL/README.org][Optimised smoothers]] | Updated versions that are optimized for the KNL. |
+  | [[smoothersKNL/README.org][Optimized smoothers]] | Updated versions that are optimized for the KNL. |
   | [[benchmarks/motorbike/README.org][Scalable motorbike benchmark]] | A modified version of the OpenFOAM tutorial case supporting different resolution meshes. |
   | [[patches/README.org][Patches]] | Patches that can be applied to the OpenFOAM main repository |
 
