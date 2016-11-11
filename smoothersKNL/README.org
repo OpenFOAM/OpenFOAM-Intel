@@ -8,5 +8,5 @@ First, source the OpenFOAM environment and, then, simply =wmake= in this directo
 
 ** Usage
 
-The additional library will need to be included in the =system/controlDict=.  Here, ="libKNL.so"= needs to be appended to the =libs= list.  Next, look in =system/fvSolution= and replace any occurances of =GaussSeidel= with =GaussSeidelKNL=, and =symGaussSeidel= with =symGaussSeidelKNL=.  Finally, run as usual.
+The additional library will need to be included in the =system/controlDict=.  Here, =libKNL.so= needs to be appended to the =libs= list.  Next, look in =system/fvSolution= and replace any occurances of =GaussSeidel= with =GaussSeidelKNL=, and =symGaussSeidel= with =symGaussSeidelKNL=.  Finally, run as usual.
 
