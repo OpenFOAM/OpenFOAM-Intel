@@ -29,16 +29,15 @@
   main OpenFOAM-dev repository.
 
   This work includes developments for the new Intel Xeon Phi processor
-  code-named Knights Landing (KNL).  The =libhbm= is a library that can be
-  pre-loaded when the KNL is running in flat-memory mode.  This will wrap memory
-  allocation/deallocation functions and selectively (based on a user specified
-  threshold) decide whether to use the MCDRAM or DDR memory.  Updated versions
-  of the Gauss-Seidel solvers are also included which improve performance on the
-  KNL platform.
-
-  A modified version of the simpleFoam motorbike tutorial with scripts to scale
-  the mesh size is also included.  This provides a reproducible method for
-  re-running results shown by Intel.
+  code-named Knights Landing (KNL).  The main OpenFOAM respository already has
+  support for the KNL target with both the Intel and GNU compiler by setting the
+  =WM_COMPILER= to either =IccKNL= or =GccKNL=.  This repository contains the
+  following:
+  
+  | [[libhbm/README.org][libhbm]] | A wrapper library for handling high bandwidth memory when running in flat memory mode on the KNL. |
+  | [[smoothersKNL/README.org][Optimised smoothers]] | Updated versions that are optimized for the KNL. |
+  | [[benchmarks/motorbike/README.org][Scalable motorbike benchmark]] | A modified version of the OpenFOAM tutorial case supporting different resolution meshes. |
+  | [[patches/README.org][Patches]] | Patches that can be applied to the OpenFOAM main repository |
 
 * [[http://OpenFOAM.org/bugs][Reporting bugs in OpenFOAM]]
 
