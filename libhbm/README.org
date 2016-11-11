@@ -29,10 +29,12 @@ The HBM_SIZE should be the amount of MCDRAM shared between the number of ranks. 
 HBM_SIZE=$(echo "16000 / 68" | bc)
 #+end_src
 
+Note: OpenFOAM allocated an MPI buffer where the size can be controlled with =MPI_BUFFER_SIZE=.  This will usually end up using the MCDRAM as is almost certainly above the threshold value.  This should be set to a low value to avoid using all the MCDRAM for this buffer (which is not even used for many of the solvers).  Try setting it to 1000000 (1MB).
+
 The library can be used included with LD_PRELOAD so that no relinking is required.  An MPI application with Intel MPI can be launched as follows:
 
 #+begin_src bash
-mpirun -np 68 -env LD_PRELOAD /path/to/libhbm.so -env HBM_SIZE 100 -env HBM_THRESHOLD 16 ./myapplication
+mpirun -np 68 -env LD_PRELOAD /path/to/libhbm.so -env HBM_SIZE 100 -env HBM_THRESHOLD 16 -env MPI_BUFFER_SIZE 1000000 ./myapplication
 #+end_src
 
 
