@@ -1,0 +1,395 @@
+diff -crB src/finiteVolume/interpolation/surfaceInterpolation/surfaceInterpolationScheme/surfaceInterpolationScheme.C ../../template2018-Opt/OpenFOAM-dev/src/finiteVolume/interpolation/surfaceInterpolation/surfaceInterpolationScheme/surfaceInterpolationScheme.C
+*** src/finiteVolume/interpolation/surfaceInterpolation/surfaceInterpolationScheme/surfaceInterpolationScheme.C	2017-05-11 03:33:53.804608000 -0600
+--- ../../template2018-Opt/OpenFOAM-dev/src/finiteVolume/interpolation/surfaceInterpolation/surfaceInterpolationScheme/surfaceInterpolationScheme.C	2017-05-11 03:42:36.419357000 -0600
+***************
+*** 183,189 ****
+  
+      Field<Type>& sfi = sf.primitiveFieldRef();
+   
+!     for (label fi=0; fi<P.size(); fi++)
+      {
+          sfi[fi] = lambda[fi]*vfi[P[fi]] + y[fi]*vfi[N[fi]];
+      }
+--- 183,191 ----
+  
+      Field<Type>& sfi = sf.primitiveFieldRef();
+   
+! 	const label NN = P.size();
+! 	#pragma ivdep 
+!     for (label fi=0; fi<NN; fi++)
+      {
+          sfi[fi] = lambda[fi]*vfi[P[fi]] + y[fi]*vfi[N[fi]];
+      }
+***************
+*** 277,283 ****
+  
+      const typename SFType::Internal& Sfi = Sf();
+  
+! 	for (label fi=0; fi<P.size(); fi++)
+      {
+          sfi[fi] = Sfi[fi] & (lambda[fi]*(vfi[P[fi]] - vfi[N[fi]]) + vfi[N[fi]]);
+      }
+--- 280,288 ----
+  
+      const typename SFType::Internal& Sfi = Sf();
+  
+! 	const label NN = P.size();
+! 	#pragma simd   
+!     for (label fi=0; fi<NN; fi++)
+      {
+          sfi[fi] = Sfi[fi] & (lambda[fi]*(vfi[P[fi]] - vfi[N[fi]]) + vfi[N[fi]]);
+      }
+diff -crB src/finiteVolume/lnInclude/surfaceInterpolationScheme.C ../../template2018-Opt/OpenFOAM-dev/src/finiteVolume/lnInclude/surfaceInterpolationScheme.C
+*** src/finiteVolume/lnInclude/surfaceInterpolationScheme.C	2017-05-11 03:33:53.804608000 -0600
+--- ../../template2018-Opt/OpenFOAM-dev/src/finiteVolume/lnInclude/surfaceInterpolationScheme.C	2017-05-11 03:42:36.419357000 -0600
+***************
+*** 183,189 ****
+  
+      Field<Type>& sfi = sf.primitiveFieldRef();
+   
+!     for (label fi=0; fi<P.size(); fi++)
+      {
+          sfi[fi] = lambda[fi]*vfi[P[fi]] + y[fi]*vfi[N[fi]];
+      }
+--- 183,191 ----
+  
+      Field<Type>& sfi = sf.primitiveFieldRef();
+   
+! 	const label NN = P.size();
+! 	#pragma ivdep 
+!     for (label fi=0; fi<NN; fi++)
+      {
+          sfi[fi] = lambda[fi]*vfi[P[fi]] + y[fi]*vfi[N[fi]];
+      }
+***************
+*** 277,283 ****
+  
+      const typename SFType::Internal& Sfi = Sf();
+  
+! 	for (label fi=0; fi<P.size(); fi++)
+      {
+          sfi[fi] = Sfi[fi] & (lambda[fi]*(vfi[P[fi]] - vfi[N[fi]]) + vfi[N[fi]]);
+      }
+--- 280,288 ----
+  
+      const typename SFType::Internal& Sfi = Sf();
+  
+! 	const label NN = P.size();
+! 	#pragma simd   
+!     for (label fi=0; fi<NN; fi++)
+      {
+          sfi[fi] = Sfi[fi] & (lambda[fi]*(vfi[P[fi]] - vfi[N[fi]]) + vfi[N[fi]]);
+      }
+diff -crB src/OpenFOAM/containers/Lists/List/ListLoopM.H ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/containers/Lists/List/ListLoopM.H
+*** src/OpenFOAM/containers/Lists/List/ListLoopM.H	2016-12-05 00:06:00.824953000 -0700
+--- ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/containers/Lists/List/ListLoopM.H	2017-05-11 03:20:52.268910000 -0600
+***************
+*** 36,45 ****
+  
+  // Element access looping using [] for vector machines
+  
+! #define List_FOR_ALL(f, i)                      \
+!         const label _n##i = (f).size();\
+!         for (label i=0; i<_n##i; i++)  \
+!         {
+  
+  #define List_END_FOR_ALL  }
+  
+--- 36,69 ----
+  
+  // Element access looping using [] for vector machines
+  
+! #define List_FOR_ALL(f, i) 	        \
+!     const label _n##i = (f).size();	\
+! 	_Pragma("simd")            \
+!     for (label i=0; i<_n##i; i++)	\
+!     {
+!   
+! #define List_END_FOR_ALL  }
+! 
+! // Provide current element
+! #define List_CELEM(f, fp, i)  (fp[i])
+! 
+! // Provide current element
+! #define List_ELEM(f, fp, i)  (fp[i])
+! 
+! #define List_ACCESS(type, f, fp) \
+!     type* const __restrict__ fp = (f).begin()
+! 
+! #define List_CONST_ACCESS(type, f, fp) \
+!     const type* const __restrict__ fp = (f).begin()
+! 
+! #elif vectorMachineGcc
+! 
+! // Element access looping using [] for vector machines
+! #define List_FOR_ALL(f, i)          \
+!     const label _n##i = (f).size(); \
+!     _Pragma("GCC ivdep")                \
+!     for (label i=0; i<_n##i; i++)   \
+!     {
+  
+  #define List_END_FOR_ALL  }
+  
+diff -crB src/OpenFOAM/containers/Lists/UList/UList.H ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/containers/Lists/UList/UList.H
+*** src/OpenFOAM/containers/Lists/UList/UList.H	2016-12-05 00:06:01.699257000 -0700
+--- ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/containers/Lists/UList/UList.H	2017-05-11 05:01:00.737179000 -0600
+***************
+*** 426,433 ****
+  // }
+  // \endcode
+  // \sa forAllReverse
+  #define forAll(list, i) \
+!     for (Foam::label i=0; i<(list).size(); i++)
+  
+  //- Reverse loop across all elements in \a list
+  //  \par Usage
+--- 426,457 ----
+  // }
+  // \endcode
+  // \sa forAllReverse
++ 
++ #define _appendLineNumber(str, line) str ## line
++ #define _appendLineNumber2(str, line) _appendLineNumber(str, line)
++ #define _uniqueString(str) _appendLineNumber2(str, __LINE__)
++ 
++ #ifdef vectorMachine
++ 
++ #define forAllVec(list, i)                                  \
++     const Foam::label _uniqueString(_n##i) = (list).size(); \
++     _Pragma("simd")                                        \
++     for (Foam::label i=0; i<_uniqueString(_n##i); i++)
++ 
++ #elif vectorMachineGcc
++ 
++     #define forAllVec(list, i)                                  \
++     const Foam::label _uniqueString(_n##i) = (list).size(); \
++     _Pragma("GCC ivdep")                                        \
++     for (Foam::label i=0; i<_uniqueString(_n##i); i++)
++ 
++ #endif
++ 
++ 
+  #define forAll(list, i) \
+!    const Foam::label _uniqueString(_n##i) = (list).size(); \
+!    for (Foam::label i=0; i<_uniqueString(_n##i); i++)
+! 
+  
+  //- Reverse loop across all elements in \a list
+  //  \par Usage
+diff -crB src/OpenFOAM/fields/Fields/Field/FieldFunctions.C ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/fields/Fields/Field/FieldFunctions.C
+*** src/OpenFOAM/fields/Fields/Field/FieldFunctions.C	2016-12-05 00:06:10.173093000 -0700
+--- ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/fields/Fields/Field/FieldFunctions.C	2017-05-11 05:11:46.489116000 -0600
+***************
+*** 338,344 ****
+          return pTraits<Type>::max;
+      }
+  }
+! 
+  TMP_UNARY_FUNCTION(Type, min)
+  
+  template<class Type>
+--- 338,344 ----
+          return pTraits<Type>::max;
+      }
+  }
+!  
+  TMP_UNARY_FUNCTION(Type, min)
+  
+  template<class Type>
+Only in ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/fields/Fields/scalarField: .scalarField.C.swp
+diff -crB src/OpenFOAM/lnInclude/FieldFunctions.C ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/lnInclude/FieldFunctions.C
+*** src/OpenFOAM/lnInclude/FieldFunctions.C	2016-12-05 00:06:10.173093000 -0700
+--- ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/lnInclude/FieldFunctions.C	2017-05-11 05:11:46.489116000 -0600
+***************
+*** 338,344 ****
+          return pTraits<Type>::max;
+      }
+  }
+! 
+  TMP_UNARY_FUNCTION(Type, min)
+  
+  template<class Type>
+--- 338,344 ----
+          return pTraits<Type>::max;
+      }
+  }
+!  
+  TMP_UNARY_FUNCTION(Type, min)
+  
+  template<class Type>
+diff -crB src/OpenFOAM/lnInclude/ListLoopM.H ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/lnInclude/ListLoopM.H
+*** src/OpenFOAM/lnInclude/ListLoopM.H	2016-12-05 00:06:00.824953000 -0700
+--- ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/lnInclude/ListLoopM.H	2017-05-11 03:20:52.268910000 -0600
+***************
+*** 36,45 ****
+  
+  // Element access looping using [] for vector machines
+  
+! #define List_FOR_ALL(f, i)                      \
+!         const label _n##i = (f).size();\
+!         for (label i=0; i<_n##i; i++)  \
+!         {
+  
+  #define List_END_FOR_ALL  }
+  
+--- 36,69 ----
+  
+  // Element access looping using [] for vector machines
+  
+! #define List_FOR_ALL(f, i) 	        \
+!     const label _n##i = (f).size();	\
+! 	_Pragma("simd")            \
+!     for (label i=0; i<_n##i; i++)	\
+!     {
+!   
+! #define List_END_FOR_ALL  }
+! 
+! // Provide current element
+! #define List_CELEM(f, fp, i)  (fp[i])
+! 
+! // Provide current element
+! #define List_ELEM(f, fp, i)  (fp[i])
+! 
+! #define List_ACCESS(type, f, fp) \
+!     type* const __restrict__ fp = (f).begin()
+! 
+! #define List_CONST_ACCESS(type, f, fp) \
+!     const type* const __restrict__ fp = (f).begin()
+! 
+! #elif vectorMachineGcc
+! 
+! // Element access looping using [] for vector machines
+! #define List_FOR_ALL(f, i)          \
+!     const label _n##i = (f).size(); \
+!     _Pragma("GCC ivdep")                \
+!     for (label i=0; i<_n##i; i++)   \
+!     {
+  
+  #define List_END_FOR_ALL  }
+  
+diff -crB src/OpenFOAM/lnInclude/UList.H ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/lnInclude/UList.H
+*** src/OpenFOAM/lnInclude/UList.H	2016-12-05 00:06:01.699257000 -0700
+--- ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/lnInclude/UList.H	2017-05-11 05:01:00.737179000 -0600
+***************
+*** 426,433 ****
+  // }
+  // \endcode
+  // \sa forAllReverse
+  #define forAll(list, i) \
+!     for (Foam::label i=0; i<(list).size(); i++)
+  
+  //- Reverse loop across all elements in \a list
+  //  \par Usage
+--- 426,457 ----
+  // }
+  // \endcode
+  // \sa forAllReverse
++ 
++ #define _appendLineNumber(str, line) str ## line
++ #define _appendLineNumber2(str, line) _appendLineNumber(str, line)
++ #define _uniqueString(str) _appendLineNumber2(str, __LINE__)
++ 
++ #ifdef vectorMachine
++ 
++ #define forAllVec(list, i)                                  \
++     const Foam::label _uniqueString(_n##i) = (list).size(); \
++     _Pragma("simd")                                        \
++     for (Foam::label i=0; i<_uniqueString(_n##i); i++)
++ 
++ #elif vectorMachineGcc
++ 
++     #define forAllVec(list, i)                                  \
++     const Foam::label _uniqueString(_n##i) = (list).size(); \
++     _Pragma("GCC ivdep")                                        \
++     for (Foam::label i=0; i<_uniqueString(_n##i); i++)
++ 
++ #endif
++ 
++ 
+  #define forAll(list, i) \
+!    const Foam::label _uniqueString(_n##i) = (list).size(); \
+!    for (Foam::label i=0; i<_uniqueString(_n##i); i++)
+! 
+  
+  //- Reverse loop across all elements in \a list
+  //  \par Usage
+diff -crB src/OpenFOAM/lnInclude/VectorSpaceI.H ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/lnInclude/VectorSpaceI.H
+*** src/OpenFOAM/lnInclude/VectorSpaceI.H	2016-12-05 00:06:41.643030000 -0700
+--- ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/lnInclude/VectorSpaceI.H	2017-05-11 05:02:51.057063000 -0600
+***************
+*** 209,215 ****
+              << abort(FatalError);
+      }
+      #endif
+! 
+      return v_[d];
+  }
+  
+--- 209,215 ----
+              << abort(FatalError);
+      }
+      #endif
+!  
+      return v_[d];
+  }
+  
+diff -crB src/OpenFOAM/lnInclude/VectorSpaceOps.H ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/lnInclude/VectorSpaceOps.H
+*** src/OpenFOAM/lnInclude/VectorSpaceOps.H	2016-12-05 00:06:41.666192000 -0700
+--- ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/lnInclude/VectorSpaceOps.H	2017-05-11 04:52:57.615050000 -0600
+***************
+*** 33,39 ****
+  #define VectorSpaceOps_H
+  
+  // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+! 
+  namespace Foam
+  {
+  
+--- 33,39 ----
+  #define VectorSpaceOps_H
+  
+  // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+!  
+  namespace Foam
+  {
+  
+diff -crB src/OpenFOAM/primitives/VectorSpace/VectorSpaceI.H ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/primitives/VectorSpace/VectorSpaceI.H
+*** src/OpenFOAM/primitives/VectorSpace/VectorSpaceI.H	2016-12-05 00:06:41.643030000 -0700
+--- ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/primitives/VectorSpace/VectorSpaceI.H	2017-05-11 05:02:51.057063000 -0600
+***************
+*** 209,215 ****
+              << abort(FatalError);
+      }
+      #endif
+! 
+      return v_[d];
+  }
+  
+--- 209,215 ----
+              << abort(FatalError);
+      }
+      #endif
+!  
+      return v_[d];
+  }
+  
+diff -crB src/OpenFOAM/primitives/VectorSpace/VectorSpaceOps.H ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/primitives/VectorSpace/VectorSpaceOps.H
+*** src/OpenFOAM/primitives/VectorSpace/VectorSpaceOps.H	2016-12-05 00:06:41.666192000 -0700
+--- ../../template2018-Opt/OpenFOAM-dev/src/OpenFOAM/primitives/VectorSpace/VectorSpaceOps.H	2017-05-11 04:52:57.615050000 -0600
+***************
+*** 33,39 ****
+  #define VectorSpaceOps_H
+  
+  // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+! 
+  namespace Foam
+  {
+  
+--- 33,39 ----
+  #define VectorSpaceOps_H
+  
+  // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+!  
+  namespace Foam
+  {
+  

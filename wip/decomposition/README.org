@@ -1,0 +1,5 @@
+
+Two decomposition methods looked at when running on a Xeon and original Xeon Phi accelerator, Knights Corner or KNC.  The KNC needed to go through the host in order to communicate and so a bounding decomposition was tested where the host completely surrounded the KNC partitions - but the decomposition resulted in a lot of communication.  The heterogeneous decomposition used to partition the domain so that Xeon cores would receive larger partitions and the KNC cores would be smaller (but more of them).
+
+This is not used now but just for reference.
+

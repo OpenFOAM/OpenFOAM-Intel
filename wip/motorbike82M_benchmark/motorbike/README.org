@@ -1,0 +1,10 @@
+* Basic sequence
+
+- blockMesh
+- copy decomposeParDict-hierarchical and run snappyHexMesh
+- reconstruct
+- copy decomposeParDict-scotch_ml.tpl and decomposePar
+- copy 0.org to each of the processor dirs
+- potentialFoam -initialiseUBCs -noFunctionObjects
+- simpleFoam
+

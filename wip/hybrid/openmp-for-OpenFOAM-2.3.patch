@@ -1,0 +1,1216 @@
+diff --git a/src/OpenFOAM/matrices/lduMatrix/lduAddressing/lduAddressing.C b/src/OpenFOAM/matrices/lduMatrix/lduAddressing/lduAddressing.C
+index 401a3cf..4e8095a 100644
+--- a/src/OpenFOAM/matrices/lduMatrix/lduAddressing/lduAddressing.C
++++ b/src/OpenFOAM/matrices/lduMatrix/lduAddressing/lduAddressing.C
+@@ -26,6 +26,19 @@ License
+ #include "lduAddressing.H"
+ #include "demandDrivenData.H"
+ #include "scalarField.H"
++#include "error.H"
++#include "CompactListList.H"
++
++#include <utility>
++#include <set>
++#include <vector>
++
++#include <omp.h>
++
++extern "C"
++{
++#include "scotch.h"
++}
+ 
+ // * * * * * * * * * * * * * Private Member Functions  * * * * * * * * * * * //
+ 
+@@ -169,6 +182,277 @@ void Foam::lduAddressing::calcLosortStart() const
+     lsrtStart[size()] = nbr.size();
+ }
+ 
++void Foam::lduAddressing::calcLosortLowerAddr() const
++{
++    if (losortLowerAddrPtr_)
++    {
++        FatalErrorIn("lduAddressing::calcLosortLowerAddr() const")
++            << "losort lower addr already calculated"
++            << abort(FatalError);
++    }
++
++    const labelUList& lPtr = lowerAddr();
++    const labelUList& addr = losortAddr();
++    const label sz = lPtr.size();
++    losortLowerAddrPtr_ = new labelList(sz);
++    labelList& nlPtr = *losortLowerAddrPtr_;
++
++#pragma omp parallel for
++    for(label i = 0; i < sz; i++)
++    {
++        nlPtr[i] = lPtr[addr[i]];
++    }
++}
++
++
++namespace { // private namespace
++
++void bubble(std::vector<std::pair<Foam::label, Foam::label> >& vec, Foam::label pos)
++{
++    while(pos < (vec.size() - 1) && vec[pos].second > vec[pos+1].second)
++    {
++        std::swap(vec[pos], vec[pos+1]);
++        ++pos;
++    }
++    while(pos > 0 && vec[pos].second < vec[pos-1].second)
++    {
++        std::swap(vec[pos], vec[pos+1]);
++        ++pos;
++    }
++}
++
++} // end of private namespace
++
++void Foam::lduAddressing::genColors() const
++{
++    if (colorsPtr_)
++    {
++        FatalErrorIn("lduAddressing::genColors() const")
++            << "colors already calculated"
++            << abort(FatalError);
++    }
++
++    const labelUList& ownStartPtr = ownerStartAddr();
++    const labelUList& uPtr = upperAddr();
++
++    // get the number of cells (which is one less than the ownerStartPtr)
++    const label nCells = ownStartPtr.size() - 1;
++    labelList cellToColor(nCells, -1);
++
++    std::set<label> neighbours;
++    typedef std::pair<label, label> ColorCount;
++    std::vector<ColorCount> colorCounts;
++    for(label cellI = nCells-1; cellI >= 0; --cellI)
++    {
++        const label fStart = ownStartPtr[cellI];
++        const label fEnd = ownStartPtr[cellI+1];
++        neighbours.clear();
++        for(label faceI = fStart; faceI < fEnd; ++faceI)
++        {
++            const label col = cellToColor[uPtr[faceI]];
++            if(col != -1)
++            {
++                neighbours.insert(col);
++            }
++        }
++
++        label c = 0;
++        const label ncolors = colorCounts.size();
++        for(; c < ncolors; ++c)
++        {
++            if(neighbours.find(colorCounts[c].first) == neighbours.end())
++            {
++                break;
++            }
++        }
++        if(c == ncolors)
++        {
++            cellToColor[cellI] = ncolors;
++            colorCounts.insert(colorCounts.begin(), ColorCount(ncolors, 1));
++        }
++        else
++        {
++            cellToColor[cellI] = colorCounts[c].first;
++            ++(colorCounts[c].second);
++            bubble(colorCounts, c);
++        }
++    }
++
++    const label ncols = colorCounts.size();
++    Info << "lduAddressing: " << ncols << " colors generated for " << nCells << " cells" << endl;
++    colorsPtr_ = new labelListList(ncols);
++    labelListList& colors = *colorsPtr_;
++    for(label cI = 0; cI < ncols; ++cI)
++    {
++        const label col = colorCounts[cI].first;
++        const label colSz = colorCounts[cI].second;
++        colors[col].resize(colSz);
++    }
++    std::vector<label> colIndex(ncols, 0);
++    for(label cellI = 0; cellI < nCells; ++cellI)
++    {
++        const label col = cellToColor[cellI];
++        const label idx = colIndex[col];
++        colors[col][idx] = cellI;
++        colIndex[col] = idx+1;
++    }
++}
++
++
++namespace { // private namespace
++
++void check(const int retVal, const char* str)
++{
++    if(retVal)
++    {
++        FatalErrorIn("Foam::lduAddressing::genPartitions(...)")
++            << "Call to scotch routine " << str << " failed."
++            << exit(Foam::FatalError);
++    }
++}
++
++} // end of private namespace
++
++void Foam::lduAddressing::genPartitions() const
++{
++    //
++    // generate cellCells
++    //
++    const labelUList& ownStartPtr = ownerStartAddr();
++    const labelUList& uPtr = upperAddr();
++    const labelUList& neighStartPtr = losortStartAddr();
++    const labelUList& nlPtr = losortLowerAddr();
++
++    // get the number of cells (which is one less than the ownerStartPtr)
++    const label nCells = ownStartPtr.size() - 1;
++
++    labelListList cc(nCells);
++    std::set<label> neighbours;
++    for(label cellI = 0; cellI < nCells; ++cellI)
++    {
++        neighbours.clear();
++
++        const label oStart = ownStartPtr[cellI];
++        const label oEnd = ownStartPtr[cellI+1];
++        for(label faceI = oStart; faceI < oEnd; ++faceI)
++        {
++            neighbours.insert(uPtr[faceI]);
++        }
++
++        const label nStart = neighStartPtr[cellI];
++        const label nEnd = neighStartPtr[cellI+1];
++        for(label faceI = nStart; faceI < nEnd; ++faceI)
++        {
++            neighbours.insert(nlPtr[faceI]);
++        }
++
++        labelList& n = cc[cellI];
++        n.setSize(neighbours.size());
++        label idx = 0;
++        for(std::set<label>::const_iterator it = neighbours.begin();
++            it != neighbours.end(); ++it)
++        {
++            n[idx++] = *it;
++        }
++    }
++
++    //
++    // use scotch to do the initial partitioning
++    //
++    CompactListList<label> cellCells(cc);
++
++    const List<int>& adjncy = cellCells.m();
++    const List<int>& xadj = cellCells.offsets();
++
++    const label nProcs = omp_get_max_threads();
++    List<int> finalDecomp;
++
++    SCOTCH_Strat stradat;
++    check(SCOTCH_stratInit(&stradat), "SCOTCH_stratInit");
++    SCOTCH_Graph grafdat;
++    check(SCOTCH_graphInit(&grafdat), "SCOTCH_graphInit");
++    check
++    (
++        SCOTCH_graphBuild
++        (
++            &grafdat,
++            0,                      // baseval, c-style numbering
++            xadj.size()-1,          // vertnbr, nCells
++            xadj.begin(),           // verttab, start index per cell into adjncy
++            &xadj[1],               // vendtab, end index  ,,
++            NULL,                   // no vertex weights
++            NULL,                   // vlbltab
++            adjncy.size(),          // edgenbr, number of arcs
++            adjncy.begin(),         // edgetab
++            NULL                    // edlotab, edge weights
++        ),
++        "SCOTCH_graphBuild"
++    );
++    check(SCOTCH_graphCheck(&grafdat), "SCOTCH_graphCheck");
++    SCOTCH_Arch archdat;
++    check(SCOTCH_archInit(&archdat), "SCOTCH_archInit");
++    check(SCOTCH_archCmplt(&archdat, nProcs), "SCOTCH_archCmplt");
++    finalDecomp.setSize(xadj.size()-1);
++    finalDecomp = 0;
++    check
++    (
++        SCOTCH_graphMap
++        (
++            &grafdat,
++            &archdat,
++            &stradat,           // const SCOTCH_Strat *
++            finalDecomp.begin() // parttab
++        ),
++        "SCOTCH_graphMap"
++    );
++    // Release storage for graph
++    SCOTCH_graphExit(&grafdat);
++    // Release storage for strategy
++    SCOTCH_stratExit(&stradat);
++    // Release storage for network topology
++    SCOTCH_archExit(&archdat);
++
++    //
++    // no find boundary cells between partitions and create partitions data
++    //
++    const label nParts = nProcs + 1; // to account for a set of boundaries
++    std::vector<label> cellCounts(nParts, 0);
++    for(label cellI = nCells-1; cellI >= 0; --cellI)
++    {
++        const label oStart = ownStartPtr[cellI];
++        const label oEnd = ownStartPtr[cellI+1];
++        for(label faceI = oStart; faceI < oEnd; ++faceI)
++        {
++            const label part = finalDecomp[cellI];
++            const label nPart = finalDecomp[uPtr[faceI]];
++
++            if (nPart != nProcs && part != nPart)
++            {
++                finalDecomp[cellI] = nProcs;
++                break;
++            }
++        }
++        cellCounts[finalDecomp[cellI]] += 1;
++    }
++    // now create the labelListList
++    partitionsPtr_ = new labelListList(nParts);
++    labelListList& partitions = *partitionsPtr_;
++    Info << "lduAddress::partitions [ " << nCells << " ]: " << nParts << " parts [";
++    for(label pI = 0; pI < nParts; ++pI)
++    {
++        Info << " " << cellCounts[pI];
++        partitions[pI].setSize(cellCounts[pI]);
++    }
++    Info << " ]" << endl;
++    std::vector<label> cellIdx(nParts, 0);
++    for(label cellI = 0; cellI < nCells; ++cellI)
++    {
++        const label part = finalDecomp[cellI];
++        const label idx = cellIdx[part]++;
++        partitions[part][idx] = cellI;
++    }
++}
++
+ 
+ // * * * * * * * * * * * * * * * * Destructor  * * * * * * * * * * * * * * * //
+ 
+@@ -177,6 +461,9 @@ Foam::lduAddressing::~lduAddressing()
+     deleteDemandDrivenData(losortPtr_);
+     deleteDemandDrivenData(ownerStartPtr_);
+     deleteDemandDrivenData(losortStartPtr_);
++    deleteDemandDrivenData(losortLowerAddrPtr_);
++    deleteDemandDrivenData(colorsPtr_);
++    deleteDemandDrivenData(partitionsPtr_);
+ }
+ 
+ 
+@@ -215,6 +502,37 @@ const Foam::labelUList& Foam::lduAddressing::losortStartAddr() const
+ }
+ 
+ 
++const Foam::labelUList& Foam::lduAddressing::losortLowerAddr() const
++{
++    if (!losortLowerAddrPtr_)
++    {
++        calcLosortLowerAddr();
++    }
++
++    return *losortLowerAddrPtr_;
++}
++
++
++const Foam::labelListList& Foam::lduAddressing::colors() const
++{
++    if(!colorsPtr_)
++    {
++        genColors();
++    }
++
++    return *colorsPtr_;
++}
++
++const Foam::labelListList& Foam::lduAddressing::partitions() const
++{
++    if(!partitionsPtr_)
++    {
++        genPartitions();
++    }
++
++    return *partitionsPtr_;
++}
++
+ // Return edge index given owner and neighbour label
+ Foam::label Foam::lduAddressing::triIndex(const label a, const label b) const
+ {
+diff --git a/src/OpenFOAM/matrices/lduMatrix/lduAddressing/lduAddressing.H b/src/OpenFOAM/matrices/lduMatrix/lduAddressing/lduAddressing.H
+index 3c9d1b2..4cfb3aa 100644
+--- a/src/OpenFOAM/matrices/lduMatrix/lduAddressing/lduAddressing.H
++++ b/src/OpenFOAM/matrices/lduMatrix/lduAddressing/lduAddressing.H
+@@ -128,6 +128,14 @@ class lduAddressing
+         //- Losort start addressing
+         mutable labelList* losortStartPtr_;
+ 
++        //- Losort lower addressing
++        mutable labelList* losortLowerAddrPtr_;
++
++        //- Lists of cell indices for each color
++        mutable labelListList* colorsPtr_;
++
++        //- Lists of cell indices for independent partitions
++        mutable labelListList* partitionsPtr_;
+ 
+     // Private Member Functions
+ 
+@@ -146,6 +154,18 @@ class lduAddressing
+         //- Calculate losort start
+         void calcLosortStart() const;
+ 
++        //- Calculate losort lower addressing
++        void calcLosortLowerAddr() const;
++
++        //- Calculate losort order lower coefficients
++        void calcLosortLower() const;
++
++        //- Generate the cell colors
++        void genColors() const;
++
++        //- Generate the independent partitions
++        void genPartitions() const;
++
+ 
+ public:
+ 
+@@ -155,7 +175,10 @@ public:
+         size_(nEqns),
+         losortPtr_(NULL),
+         ownerStartPtr_(NULL),
+-        losortStartPtr_(NULL)
++        losortStartPtr_(NULL),
++        losortLowerAddrPtr_(NULL),
++        colorsPtr_(NULL),
++        partitionsPtr_(NULL)
+     {}
+ 
+ 
+@@ -195,6 +218,15 @@ public:
+         //- Return losort start addressing
+         const labelUList& losortStartAddr() const;
+ 
++        //- Return losort start addressing
++        const labelUList& losortLowerAddr() const;
++
++        //- Return list of cell indices for each color
++        const labelListList& colors() const;
++
++        //- Return list of cell indices for independent partitions
++        const labelListList& partitions() const;
++
+         //- Return off-diagonal index given owner and neighbour label
+         label triIndex(const label a, const label b) const;
+ 
+diff --git a/src/OpenFOAM/matrices/lduMatrix/lduMatrix/lduMatrix.C b/src/OpenFOAM/matrices/lduMatrix/lduMatrix/lduMatrix.C
+index b8bc5c9..a00eb36 100644
+--- a/src/OpenFOAM/matrices/lduMatrix/lduMatrix/lduMatrix.C
++++ b/src/OpenFOAM/matrices/lduMatrix/lduMatrix/lduMatrix.C
+@@ -26,6 +26,7 @@ License
+ #include "lduMatrix.H"
+ #include "IOstreams.H"
+ #include "Switch.H"
++#include "demandDrivenData.H"
+ 
+ // * * * * * * * * * * * * * * Static Data Members * * * * * * * * * * * * * //
+ 
+@@ -42,7 +43,8 @@ Foam::lduMatrix::lduMatrix(const lduMesh& mesh)
+     lduMesh_(mesh),
+     lowerPtr_(NULL),
+     diagPtr_(NULL),
+-    upperPtr_(NULL)
++    upperPtr_(NULL),
++    losortLowerPtr_(NULL)
+ {}
+ 
+ 
+@@ -51,7 +53,8 @@ Foam::lduMatrix::lduMatrix(const lduMatrix& A)
+     lduMesh_(A.lduMesh_),
+     lowerPtr_(NULL),
+     diagPtr_(NULL),
+-    upperPtr_(NULL)
++    upperPtr_(NULL),
++    losortLowerPtr_(NULL)
+ {
+     if (A.lowerPtr_)
+     {
+@@ -75,7 +78,8 @@ Foam::lduMatrix::lduMatrix(lduMatrix& A, bool reUse)
+     lduMesh_(A.lduMesh_),
+     lowerPtr_(NULL),
+     diagPtr_(NULL),
+-    upperPtr_(NULL)
++    upperPtr_(NULL),
++    losortLowerPtr_(NULL)
+ {
+     if (reUse)
+     {
+@@ -122,7 +126,8 @@ Foam::lduMatrix::lduMatrix(const lduMesh& mesh, Istream& is)
+     lduMesh_(mesh),
+     lowerPtr_(NULL),
+     diagPtr_(NULL),
+-    upperPtr_(NULL)
++    upperPtr_(NULL),
++    losortLowerPtr_(NULL)
+ {
+     Switch hasLow(is);
+     Switch hasDiag(is);
+@@ -159,6 +164,34 @@ Foam::lduMatrix::~lduMatrix()
+     {
+         delete upperPtr_;
+     }
++
++    deleteDemandDrivenData(losortLowerPtr_);
++}
++
++
++const Foam::scalarField& Foam::lduMatrix::losortLower() const
++{
++    if (!losortLowerPtr_)
++    {
++        const scalarField& lPtr = lower();
++        const labelUList& addr = lduAddr().losortAddr();
++        const label sz = lPtr.size();
++        losortLowerPtr_ = new scalarField(sz);
++        scalarField& nlPtr = *losortLowerPtr_;
++
++#pragma omp parallel for
++        for(label i = 0; i < sz; i++)
++        {
++            nlPtr[i] = lPtr[addr[i]];
++        }
++    }
++
++    return *losortLowerPtr_;
++}
++
++void Foam::lduMatrix::clearLosortLower() const
++{
++    deleteDemandDrivenData(losortLowerPtr_);
+ }
+ 
+ 
+diff --git a/src/OpenFOAM/matrices/lduMatrix/lduMatrix/lduMatrix.H b/src/OpenFOAM/matrices/lduMatrix/lduMatrix/lduMatrix.H
+index fdaf834..0ec522f 100644
+--- a/src/OpenFOAM/matrices/lduMatrix/lduMatrix/lduMatrix.H
++++ b/src/OpenFOAM/matrices/lduMatrix/lduMatrix/lduMatrix.H
+@@ -84,6 +84,8 @@ class lduMatrix
+ 
+         //- Coefficients (not including interfaces)
+         scalarField *lowerPtr_, *diagPtr_, *upperPtr_;
++        //- Losort ordered lower coefficients
++        mutable scalarField *losortLowerPtr_;
+ 
+ 
+ public:
+@@ -578,6 +580,13 @@ public:
+             const scalarField& diag() const;
+             const scalarField& upper() const;
+ 
++
++            //- Return losort ordered lower coefficients
++            const scalarField& losortLower() const;
++            //- Clear cache of losortLower
++            void clearLosortLower() const;
++
++
+             bool hasDiag() const
+             {
+                 return (diagPtr_);
+diff --git a/src/OpenFOAM/matrices/lduMatrix/lduMatrix/lduMatrixATmul.C b/src/OpenFOAM/matrices/lduMatrix/lduMatrix/lduMatrixATmul.C
+index 723a999..13c9123 100644
+--- a/src/OpenFOAM/matrices/lduMatrix/lduMatrix/lduMatrixATmul.C
++++ b/src/OpenFOAM/matrices/lduMatrix/lduMatrix/lduMatrixATmul.C
+@@ -48,10 +48,14 @@ void Foam::lduMatrix::Amul
+     const scalar* const __restrict__ diagPtr = diag().begin();
+ 
+     const label* const __restrict__ uPtr = lduAddr().upperAddr().begin();
+-    const label* const __restrict__ lPtr = lduAddr().lowerAddr().begin();
++    const label* const __restrict__ nlPtr = lduAddr().losortLowerAddr().begin();
+ 
+     const scalar* const __restrict__ upperPtr = upper().begin();
+-    const scalar* const __restrict__ lowerPtr = lower().begin();
++    const scalar* const __restrict__ nlowerPtr = losortLower().begin();
++
++    const label* const __restrict__ ownStartPtr = lduAddr().ownerStartAddr().begin();
++    const label* const __restrict__ neighStartPtr = lduAddr().losortStartAddr().begin();
++    //const label* const __restrict__ addr = lduAddr().losortAddr().begin();
+ 
+     // Initialise the update of interfaced interfaces
+     initMatrixInterfaces
+@@ -64,18 +68,32 @@ void Foam::lduMatrix::Amul
+     );
+ 
+     register const label nCells = diag().size();
++/*
++#pragma omp parallel for
+     for (register label cell=0; cell<nCells; cell++)
+     {
+         ApsiPtr[cell] = diagPtr[cell]*psiPtr[cell];
+     }
+-
+-
+-    register const label nFaces = upper().size();
+-
+-    for (register label face=0; face<nFaces; face++)
++*/
++#pragma omp parallel for
++    for (register label cell=0; cell<nCells; cell++)
+     {
+-        ApsiPtr[uPtr[face]] += lowerPtr[face]*psiPtr[lPtr[face]];
+-        ApsiPtr[lPtr[face]] += upperPtr[face]*psiPtr[uPtr[face]];
++        label fStart  = ownStartPtr[cell];
++        label fEnd = ownStartPtr[cell+1];
++        scalar val = 0.0;
++        for (register label facei=fStart; facei<fEnd; facei++)
++        {
++            val += upperPtr[facei]*psiPtr[uPtr[facei]];
++        }
++
++        fStart  = neighStartPtr[cell];
++        fEnd = neighStartPtr[cell+1];
++        for (register label facei=fStart; facei<fEnd; facei++)
++        {
++            //val += lowerPtr[addr[facei]]*psiPtr[nlPtr[facei]];
++            val += nlowerPtr[facei]*psiPtr[nlPtr[facei]];
++        }
++        ApsiPtr[cell] = (diagPtr[cell]*psiPtr[cell]) + val;
+     }
+ 
+     // Update interface interfaces
+@@ -109,11 +127,15 @@ void Foam::lduMatrix::Tmul
+     const scalar* const __restrict__ diagPtr = diag().begin();
+ 
+     const label* const __restrict__ uPtr = lduAddr().upperAddr().begin();
+-    const label* const __restrict__ lPtr = lduAddr().lowerAddr().begin();
++    const label* const __restrict__ nlPtr = lduAddr().losortLowerAddr().begin();
+ 
+     const scalar* const __restrict__ lowerPtr = lower().begin();
+     const scalar* const __restrict__ upperPtr = upper().begin();
+ 
++    const label* const __restrict__ ownStartPtr = lduAddr().ownerStartAddr().begin();
++    const label* const __restrict__ neighStartPtr = lduAddr().losortStartAddr().begin();
++    const label* const __restrict__ addr = lduAddr().losortAddr().begin();
++
+     // Initialise the update of interfaced interfaces
+     initMatrixInterfaces
+     (
+@@ -125,17 +147,41 @@ void Foam::lduMatrix::Tmul
+     );
+ 
+     register const label nCells = diag().size();
++/*
++#pragma omp parallel for
+     for (register label cell=0; cell<nCells; cell++)
+     {
+         TpsiPtr[cell] = diagPtr[cell]*psiPtr[cell];
+     }
++*/
++#pragma omp parallel for
++    for (register label cell=0; cell<nCells; cell++)
++    {
++        label fStart  = ownStartPtr[cell];
++        label fEnd = ownStartPtr[cell+1];
++        scalar val = 0.0;
++        for (register label facei=fStart; facei<fEnd; facei++)
++        {
++            val += lowerPtr[facei]*psiPtr[uPtr[facei]];
++        }
+ 
++        fStart  = neighStartPtr[cell];
++        fEnd = neighStartPtr[cell+1];
++        for (register label facei=fStart; facei<fEnd; facei++)
++        {
++            val += upperPtr[addr[facei]]*psiPtr[nlPtr[facei]];
++        }
++        TpsiPtr[cell] = (diagPtr[cell]*psiPtr[cell]) + val;
++    }
++
++    /*
+     register const label nFaces = upper().size();
+     for (register label face=0; face<nFaces; face++)
+     {
+         TpsiPtr[uPtr[face]] += upperPtr[face]*psiPtr[lPtr[face]];
+         TpsiPtr[lPtr[face]] += lowerPtr[face]*psiPtr[uPtr[face]];
+     }
++    */
+ 
+     // Update interface interfaces
+     updateMatrixInterfaces
+@@ -162,25 +208,50 @@ void Foam::lduMatrix::sumA
+ 
+     const scalar* __restrict__ diagPtr = diag().begin();
+ 
+-    const label* __restrict__ uPtr = lduAddr().upperAddr().begin();
+-    const label* __restrict__ lPtr = lduAddr().lowerAddr().begin();
+-
+-    const scalar* __restrict__ lowerPtr = lower().begin();
++    const scalar* __restrict__ nlowerPtr = losortLower().begin();
+     const scalar* __restrict__ upperPtr = upper().begin();
+ 
++    const label* const __restrict__ ownStartPtr = lduAddr().ownerStartAddr().begin();
++    const label* const __restrict__ neighStartPtr = lduAddr().losortStartAddr().begin();
++    //const label* const __restrict__ addr = lduAddr().losortAddr().begin();
++
+     register const label nCells = diag().size();
+-    register const label nFaces = upper().size();
+ 
++/*
++#pragma omp parallel for
+     for (register label cell=0; cell<nCells; cell++)
+     {
+         sumAPtr[cell] = diagPtr[cell];
+     }
++*/
++
++#pragma omp parallel for
++    for (register label cell=0; cell<nCells; cell++)
++    {
++        label fStart  = ownStartPtr[cell];
++        label fEnd = ownStartPtr[cell+1];
++        scalar val = 0.0;
++        for (register label facei=fStart; facei<fEnd; facei++)
++        {
++            val += upperPtr[facei];
++        }
++
++        fStart  = neighStartPtr[cell];
++        fEnd = neighStartPtr[cell+1];
++        for (register label facei=fStart; facei<fEnd; facei++)
++        {
++            val += nlowerPtr[facei];
++        }
++        sumAPtr[cell] = diagPtr[cell] + val;
++    }
+ 
++    /* ORIGINAL CODE
+     for (register label face=0; face<nFaces; face++)
+     {
+         sumAPtr[uPtr[face]] += lowerPtr[face];
+         sumAPtr[lPtr[face]] += upperPtr[face];
+     }
++    */
+ 
+     // Add the interface internal coefficients to diagonal
+     // and the interface boundary coefficients to the sum-off-diagonal
+@@ -217,10 +288,14 @@ void Foam::lduMatrix::residual
+     const scalar* const __restrict__ sourcePtr = source.begin();
+ 
+     const label* const __restrict__ uPtr = lduAddr().upperAddr().begin();
+-    const label* const __restrict__ lPtr = lduAddr().lowerAddr().begin();
++    const label* const __restrict__ nlPtr = lduAddr().losortLowerAddr().begin();
+ 
+     const scalar* const __restrict__ upperPtr = upper().begin();
+-    const scalar* const __restrict__ lowerPtr = lower().begin();
++    const scalar* const __restrict__ nlowerPtr = losortLower().begin();
++
++    const label* const __restrict__ ownStartPtr = lduAddr().ownerStartAddr().begin();
++    const label* const __restrict__ neighStartPtr = lduAddr().losortStartAddr().begin();
++    //const label* const __restrict__ addr = lduAddr().losortAddr().begin();
+ 
+     // Parallel boundary initialisation.
+     // Note: there is a change of sign in the coupled
+@@ -254,19 +329,40 @@ void Foam::lduMatrix::residual
+     );
+ 
+     register const label nCells = diag().size();
++/*
++#pragma omp parallel for
+     for (register label cell=0; cell<nCells; cell++)
+     {
+         rAPtr[cell] = sourcePtr[cell] - diagPtr[cell]*psiPtr[cell];
+     }
++*/
++#pragma omp parallel for
++    for (register label cell=0; cell<nCells; cell++)
++    {
++        label fStart  = ownStartPtr[cell];
++        label fEnd = ownStartPtr[cell+1];
++        scalar val = 0.0;
++        for (register label facei=fStart; facei<fEnd; facei++)
++        {
++            val += upperPtr[facei]*psiPtr[uPtr[facei]];
++        }
+ 
+-
++        fStart  = neighStartPtr[cell];
++        fEnd = neighStartPtr[cell+1];
++        for (register label facei=fStart; facei<fEnd; facei++)
++        {
++            val += nlowerPtr[facei]*psiPtr[nlPtr[facei]];
++        }
++        rAPtr[cell] = (sourcePtr[cell] - diagPtr[cell]*psiPtr[cell]) - val;
++    }
++    /*
+     register const label nFaces = upper().size();
+-
+     for (register label face=0; face<nFaces; face++)
+     {
+         rAPtr[uPtr[face]] -= lowerPtr[face]*psiPtr[lPtr[face]];
+         rAPtr[lPtr[face]] -= upperPtr[face]*psiPtr[uPtr[face]];
+-    }
++    } 
++    */
+ 
+     // Update interface interfaces
+     updateMatrixInterfaces
+diff --git a/src/OpenFOAM/matrices/lduMatrix/lduMatrix/lduMatrixOperations.C b/src/OpenFOAM/matrices/lduMatrix/lduMatrix/lduMatrixOperations.C
+index 53e6dd2..9705802 100644
+--- a/src/OpenFOAM/matrices/lduMatrix/lduMatrix/lduMatrixOperations.C
++++ b/src/OpenFOAM/matrices/lduMatrix/lduMatrix/lduMatrixOperations.C
+@@ -32,6 +32,7 @@ Description
+ 
+ void Foam::lduMatrix::sumDiag()
+ {
++    /*
+     const scalarField& Lower = const_cast<const lduMatrix&>(*this).lower();
+     const scalarField& Upper = const_cast<const lduMatrix&>(*this).upper();
+     scalarField& Diag = diag();
+@@ -44,11 +45,44 @@ void Foam::lduMatrix::sumDiag()
+         Diag[l[face]] += Lower[face];
+         Diag[u[face]] += Upper[face];
+     }
++    */
++
++    scalar* __restrict__ diagPtr = diag().begin();
++
++    const scalar* __restrict__ lowerPtr = const_cast<const lduMatrix&>(*this).lower().begin();
++    const scalar* __restrict__ upperPtr = const_cast<const lduMatrix&>(*this).upper().begin();
++
++    const label* const __restrict__ ownStartPtr = lduAddr().ownerStartAddr().begin();
++    const label* const __restrict__ neighStartPtr = lduAddr().losortStartAddr().begin();
++    const label* const __restrict__ addr = lduAddr().losortAddr().begin();
++
++    const label nCells = diag().size();
++
++#pragma omp parallel for
++    for (register label cell=0; cell<nCells; cell++)
++    {
++        label fStart  = ownStartPtr[cell];
++        label fEnd = ownStartPtr[cell+1];
++        scalar val = 0.0;
++        for (register label facei=fStart; facei<fEnd; facei++)
++        {
++            val += lowerPtr[facei];
++        }
++
++        fStart  = neighStartPtr[cell];
++        fEnd = neighStartPtr[cell+1];
++        for (register label facei=fStart; facei<fEnd; facei++)
++        {
++            val += upperPtr[addr[facei]];
++        }
++        diagPtr[cell] += val;
++    }
+ }
+ 
+ 
+ void Foam::lduMatrix::negSumDiag()
+ {
++    /*
+     const scalarField& Lower = const_cast<const lduMatrix&>(*this).lower();
+     const scalarField& Upper = const_cast<const lduMatrix&>(*this).upper();
+     scalarField& Diag = diag();
+@@ -61,6 +95,38 @@ void Foam::lduMatrix::negSumDiag()
+         Diag[l[face]] -= Lower[face];
+         Diag[u[face]] -= Upper[face];
+     }
++    */
++
++    scalar* __restrict__ diagPtr = diag().begin();
++
++    const scalar* __restrict__ lowerPtr = const_cast<const lduMatrix&>(*this).lower().begin();
++    const scalar* __restrict__ upperPtr = const_cast<const lduMatrix&>(*this).upper().begin();
++
++    const label* const __restrict__ ownStartPtr = lduAddr().ownerStartAddr().begin();
++    const label* const __restrict__ neighStartPtr = lduAddr().losortStartAddr().begin();
++    const label* const __restrict__ addr = lduAddr().losortAddr().begin();
++
++    const label nCells = diag().size();
++
++#pragma omp parallel for
++    for (register label cell=0; cell<nCells; cell++)
++    {
++        label fStart  = ownStartPtr[cell];
++        label fEnd = ownStartPtr[cell+1];
++        scalar val = 0.0;
++        for (register label facei=fStart; facei<fEnd; facei++)
++        {
++            val += lowerPtr[facei];
++        }
++
++        fStart  = neighStartPtr[cell];
++        fEnd = neighStartPtr[cell+1];
++        for (register label facei=fStart; facei<fEnd; facei++)
++        {
++            val += upperPtr[addr[facei]];
++        }
++        diagPtr[cell] -= val;
++    }
+ }
+ 
+ 
+@@ -69,6 +135,7 @@ void Foam::lduMatrix::sumMagOffDiag
+     scalarField& sumOff
+ ) const
+ {
++    /*
+     const scalarField& Lower = const_cast<const lduMatrix&>(*this).lower();
+     const scalarField& Upper = const_cast<const lduMatrix&>(*this).upper();
+ 
+@@ -80,6 +147,38 @@ void Foam::lduMatrix::sumMagOffDiag
+         sumOff[u[face]] += mag(Lower[face]);
+         sumOff[l[face]] += mag(Upper[face]);
+     }
++    */
++
++    scalar* __restrict__ sumOffPtr = sumOff.begin();
++
++    const scalar* __restrict__ lowerPtr = const_cast<const lduMatrix&>(*this).lower().begin();
++    const scalar* __restrict__ upperPtr = const_cast<const lduMatrix&>(*this).upper().begin();
++
++    const label* const __restrict__ ownStartPtr = lduAddr().ownerStartAddr().begin();
++    const label* const __restrict__ neighStartPtr = lduAddr().losortStartAddr().begin();
++    const label* const __restrict__ addr = lduAddr().losortAddr().begin();
++
++    const label nCells = sumOff.size();
++
++#pragma omp parallel for
++    for (register label cell=0; cell<nCells; cell++)
++    {
++        label fStart  = ownStartPtr[cell];
++        label fEnd = ownStartPtr[cell+1];
++        scalar val = 0.0;
++        for (register label facei=fStart; facei<fEnd; facei++)
++        {
++            val += mag(lowerPtr[facei]);
++        }
++
++        fStart  = neighStartPtr[cell];
++        fEnd = neighStartPtr[cell+1];
++        for (register label facei=fStart; facei<fEnd; facei++)
++        {
++            val += mag(upperPtr[addr[facei]]);
++        }
++        sumOffPtr[cell] += val;
++    }
+ }
+ 
+ 
+diff --git a/src/OpenFOAM/matrices/lduMatrix/smoothers/GaussSeidel/GaussSeidelSmoother.C b/src/OpenFOAM/matrices/lduMatrix/smoothers/GaussSeidel/GaussSeidelSmoother.C
+index 42bbea8..47ff58d 100644
+--- a/src/OpenFOAM/matrices/lduMatrix/smoothers/GaussSeidel/GaussSeidelSmoother.C
++++ b/src/OpenFOAM/matrices/lduMatrix/smoothers/GaussSeidel/GaussSeidelSmoother.C
+@@ -25,6 +25,15 @@ License
+ 
+ #include "GaussSeidelSmoother.H"
+ 
++#include <omp.h>
++
++namespace { // private namespace
++
++bool useCellColoring = static_cast<bool>(getenv("USE_CELL_COLORING"));
++
++} // end of private namespace
++
++
+ // * * * * * * * * * * * * * * Static Data Members * * * * * * * * * * * * * //
+ 
+ namespace Foam
+@@ -38,7 +47,6 @@ namespace Foam
+         addGaussSeidelSmootherAsymMatrixConstructorToTable_;
+ }
+ 
+-
+ // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
+ 
+ Foam::GaussSeidelSmoother::GaussSeidelSmoother
+@@ -58,7 +66,8 @@ Foam::GaussSeidelSmoother::GaussSeidelSmoother
+         interfaceIntCoeffs,
+         interfaces
+     )
+-{}
++{
++}
+ 
+ 
+ // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
+@@ -85,8 +94,8 @@ void Foam::GaussSeidelSmoother::smooth
+     register const scalar* const __restrict__ diagPtr = matrix_.diag().begin();
+     register const scalar* const __restrict__ upperPtr =
+         matrix_.upper().begin();
+-    register const scalar* const __restrict__ lowerPtr =
+-        matrix_.lower().begin();
++    register const scalar* const __restrict__ nlowerPtr =
++        matrix_.losortLower().begin();
+ 
+     register const label* const __restrict__ uPtr =
+         matrix_.lduAddr().upperAddr().begin();
+@@ -94,6 +103,15 @@ void Foam::GaussSeidelSmoother::smooth
+     register const label* const __restrict__ ownStartPtr =
+         matrix_.lduAddr().ownerStartAddr().begin();
+ 
++    register const label* const __restrict__ nlPtr =
++        matrix_.lduAddr().losortLowerAddr().begin();
++
++    register const label* const __restrict__ neighStartPtr =
++        matrix_.lduAddr().losortStartAddr().begin();
++
++    //register const label* const __restrict__ addr =
++    //    matrix_.lduAddr().losortAddr().begin();
++
+ 
+     // Parallel boundary initialisation.  The parallel boundary is treated
+     // as an effective jacobi interface in the boundary.
+@@ -144,35 +162,138 @@ void Foam::GaussSeidelSmoother::smooth
+             cmpt
+         );
+ 
+-        register scalar psii;
+-        register label fStart;
+-        register label fEnd = ownStartPtr[0];
+-
+-        for (register label celli=0; celli<nCells; celli++)
++        const label nThreads = omp_get_max_threads();
++        if(nThreads > 1 && nCells > 1000 && !useCellColoring)
+         {
+-            // Start and end of this row
+-            fStart = fEnd;
+-            fEnd = ownStartPtr[celli + 1];
+-
+-            // Get the accumulated neighbour side
+-            psii = bPrimePtr[celli];
+-
+-            // Accumulate the owner product side
+-            for (register label facei=fStart; facei<fEnd; facei++)
++            const labelListList& partitions = matrix_.lduAddr().partitions();
++#pragma omp parallel
+             {
+-                psii -= upperPtr[facei]*psiPtr[uPtr[facei]];
++                const label threadI = omp_get_thread_num();
++                const labelList& part = partitions[threadI];
++
++                for (register label i=0; i<part.size(); i++)
++                {
++                    const label celli = part[i];
++
++                    // Start and end of this row (for owner and neighbour)
++                    const label fStart = ownStartPtr[celli];
++                    const label fEnd = ownStartPtr[celli + 1];
++                    const label nfStart = neighStartPtr[celli];
++                    const label nfEnd = neighStartPtr[celli + 1];
++
++                    scalar psii = 0.0;
++
++                    // Accumulate the neighbour product side
++                    for (register label facei=nfStart; facei<nfEnd; facei++)
++                    {
++                        //psii += lowerPtr[addr[facei]]*psiPtr[lPtr[addr[facei]]];
++                        psii += nlowerPtr[facei]*psiPtr[nlPtr[facei]];
++                    }
++
++                    // Accumulate the owner product side
++                    for (register label facei=fStart; facei<fEnd; facei++)
++                    {
++                        psii += upperPtr[facei]*psiPtr[uPtr[facei]];
++                    }
++
++                    psiPtr[celli] = (bPrimePtr[celli] - psii) / diagPtr[celli];
++                }
+             }
+ 
+-            // Finish psi for this cell
+-            psii /= diagPtr[celli];
++            // now do the last bit in serial
++            const labelList& part = partitions[nThreads];
+ 
+-            // Distribute the neighbour side using psi for this cell
+-            for (register label facei=fStart; facei<fEnd; facei++)
++            for (register label i=0; i<part.size(); i++)
+             {
+-                bPrimePtr[uPtr[facei]] -= lowerPtr[facei]*psii;
++                const label celli = part[i];
++
++                // Start and end of this row (for owner and neighbour)
++                const label fStart = ownStartPtr[celli];
++                const label fEnd = ownStartPtr[celli + 1];
++                const label nfStart = neighStartPtr[celli];
++                const label nfEnd = neighStartPtr[celli + 1];
++
++                scalar psii = 0.0;
++
++                // Accumulate the neighbour product side
++                for (register label facei=nfStart; facei<nfEnd; facei++)
++                {
++                    //psii += lowerPtr[addr[facei]]*psiPtr[lPtr[addr[facei]]];
++                    psii += nlowerPtr[facei]*psiPtr[nlPtr[facei]];
++                }
++
++                // Accumulate the owner product side
++                for (register label facei=fStart; facei<fEnd; facei++)
++                {
++                    psii += upperPtr[facei]*psiPtr[uPtr[facei]];
++                }
++
++                psiPtr[celli] = (bPrimePtr[celli] - psii) / diagPtr[celli];
++            }
++        }
++        else if (nThreads > 1 && nCells > 1000 && useCellColoring)
++        {
++            const labelListList& colors = matrix_.lduAddr().colors();
++            for(label c=0; c<colors.size(); c++)
++            {
++                const labelList& col = colors[c];
++#pragma omp parallel for
++                for (register label i=0; i<col.size(); i++)
++                {
++                    const label celli = col[i];
++
++                    // Start and end of this row (for owner and neighbour)
++                    const label fStart = ownStartPtr[celli];
++                    const label fEnd = ownStartPtr[celli + 1];
++                    const label nfStart = neighStartPtr[celli];
++                    const label nfEnd = neighStartPtr[celli + 1];
++
++                    scalar psii = 0.0;
++
++                    // Accumulate the neighbour product side
++                    for (register label facei=nfStart; facei<nfEnd; facei++)
++                    {
++                        //psii += lowerPtr[addr[facei]]*psiPtr[lPtr[addr[facei]]];
++                        psii += nlowerPtr[facei]*psiPtr[nlPtr[facei]];
++                    }
++
++                    // Accumulate the owner product side
++                    for (register label facei=fStart; facei<fEnd; facei++)
++                    {
++                        psii += upperPtr[facei]*psiPtr[uPtr[facei]];
++                    }
++
++                    psiPtr[celli] = (bPrimePtr[celli] - psii) / diagPtr[celli];
++                }
++            }
++        }
++        else
++        {
++            for (register label celli=0; celli<nCells; celli++)
++            {
++                // Start and end of this row (for owner and neighbour)
++                const label fStart = ownStartPtr[celli];
++                const label fEnd = ownStartPtr[celli + 1];
++                const label nfStart = neighStartPtr[celli];
++                const label nfEnd = neighStartPtr[celli + 1];
++
++                scalar psii = 0.0;
++
++                // Accumulate the neighbour product side
++                for (register label facei=nfStart; facei<nfEnd; facei++)
++                {
++                    //psii += lowerPtr[addr[facei]]*psiPtr[lPtr[addr[facei]]];
++                    psii += nlowerPtr[facei]*psiPtr[nlPtr[facei]];
++                }
++
++                // Accumulate the owner product side
++                for (register label facei=fStart; facei<fEnd; facei++)
++                {
++                    psii += upperPtr[facei]*psiPtr[uPtr[facei]];
++                }
++
++                psiPtr[celli] = (bPrimePtr[celli] - psii) / diagPtr[celli];
+             }
+-
+-            psiPtr[celli] = psii;
+         }
+     }
+ 
+diff --git a/src/OpenFOAM/matrices/lduMatrix/solvers/smoothSolver/smoothSolver.C b/src/OpenFOAM/matrices/lduMatrix/solvers/smoothSolver/smoothSolver.C
+index 1fa2ee7..2b8ed5a 100644
+--- a/src/OpenFOAM/matrices/lduMatrix/solvers/smoothSolver/smoothSolver.C
++++ b/src/OpenFOAM/matrices/lduMatrix/solvers/smoothSolver/smoothSolver.C
+@@ -83,6 +83,8 @@ Foam::solverPerformance Foam::smoothSolver::solve
+ {
+     // Setup class containing solver performance data
+     solverPerformance solverPerf(typeName, fieldName_);
++    // clear the cache lower coefficients in losort order to be used here
++    matrix_.clearLosortLower();
+ 
+     // If the nSweeps_ is negative do a fixed number of sweeps
+     if (nSweeps_ < 0)
+diff --git a/src/finiteVolume/finiteVolume/fvc/fvcSurfaceIntegrate.C b/src/finiteVolume/finiteVolume/fvc/fvcSurfaceIntegrate.C
+index 669b1e4..7d88eb7 100644
+--- a/src/finiteVolume/finiteVolume/fvc/fvcSurfaceIntegrate.C
++++ b/src/finiteVolume/finiteVolume/fvc/fvcSurfaceIntegrate.C
+@@ -48,16 +48,39 @@ void surfaceIntegrate
+ {
+     const fvMesh& mesh = ssf.mesh();
+ 
+-    const labelUList& owner = mesh.owner();
+-    const labelUList& neighbour = mesh.neighbour();
++    //const labelUList& owner = mesh.owner();
++    //const labelUList& neighbour = mesh.neighbour();
+ 
+-    const Field<Type>& issf = ssf;
++    const label* const __restrict__ ownStartPtr = mesh.lduAddr().ownerStartAddr().begin();
++    const label* const __restrict__ neighStartPtr = mesh.lduAddr().losortStartAddr().begin();
++    const label* const __restrict__ addr = mesh.lduAddr().losortAddr().begin();
++    const label nCells = ivf.size();
+ 
++    const Field<Type>& issf = ssf;
++/*
+     forAll(owner, facei)
+     {
+         ivf[owner[facei]] += issf[facei];
+         ivf[neighbour[facei]] -= issf[facei];
+     }
++*/
++
++#pragma omp parallel for
++    for(label cellI = 0; cellI < nCells; ++cellI)
++    {
++        const label oStart = ownStartPtr[cellI];
++        const label oEnd = ownStartPtr[cellI+1];
++        for(label faceI = oStart; faceI < oEnd; ++faceI)
++        {
++            ivf[cellI] += issf[faceI];
++        }
++        const label nStart  = neighStartPtr[cellI];
++        const label nEnd = neighStartPtr[cellI+1];
++        for(label faceI = nStart; faceI < nEnd; ++faceI)
++        {
++            ivf[cellI] -= issf[addr[faceI]];
++        }
++    }
+ 
+     forAll(mesh.boundary(), patchi)
+     {
+diff --git a/src/finiteVolume/interpolation/surfaceInterpolation/surfaceInterpolationScheme/surfaceInterpolationScheme.C b/src/finiteVolume/interpolation/surfaceInterpolation/surfaceInterpolationScheme/surfaceInterpolationScheme.C
+index f66c3ac..09cbf5d 100644
+--- a/src/finiteVolume/interpolation/surfaceInterpolation/surfaceInterpolationScheme/surfaceInterpolationScheme.C
++++ b/src/finiteVolume/interpolation/surfaceInterpolation/surfaceInterpolationScheme/surfaceInterpolationScheme.C
+@@ -208,6 +208,7 @@ surfaceInterpolationScheme<Type>::interpolate
+ 
+     Field<Type>& sfi = sf.internalField();
+ 
++#pragma omp parallel for
+     for (register label fi=0; fi<P.size(); fi++)
+     {
+         sfi[fi] = lambda[fi]*vfi[P[fi]] + y[fi]*vfi[N[fi]];
+@@ -290,6 +291,7 @@ surfaceInterpolationScheme<Type>::interpolate
+ 
+     Field<Type>& sfi = sf.internalField();
+ 
++#pragma omp parallel for
+     for (register label fi=0; fi<P.size(); fi++)
+     {
+         sfi[fi] = lambda[fi]*(vfi[P[fi]] - vfi[N[fi]]) + vfi[N[fi]];

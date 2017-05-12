@@ -1,0 +1,3 @@
+* Experiment with Expression Templates
+
+Proof of concept implementation for kOmegaSST (in fairly old OpenFOAM version).
