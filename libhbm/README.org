@@ -1,11 +1,40 @@
-Assumes NUMA node 1 is MCDRAM
-Requires libnuma and TBB
+* libhbm
 
-Usage:
+This library has been written specifically for running OpenFOAM in "Flat" memory mode.  The "Flat" memory mode provides a separate NUMA domain for the MCDRAM allowing the user to decide where to allocate the memory.  This library provides similar functionality to autohbw in memkind (https://github.com/memkind/memkind).  The main difference with libhbm is that the MCDRAM is used to create a fixed size heap for a process.  This is allocated at the start and never freed until the application terminates.  A threshold decides whether to try and allocate to the heap in MCDRAM (and reverts back to DDR memory if this fails).  Both the heap size and threshold are configurable though environment variables.
 
-LD_PRELOAD=./libhbm.so HBM_SIZE=<size per process on MB> HBM_THRESHOLD=<threshold in kB> ./binary
+** Compilation
 
-Example for 100MB of MCDRAM per process and all allocation over 64K to go to MCDRAM
+Make sure the Intel compilers are in the path and type, =make=.  The following dependencies are required:
+- *libnuma*: Used for allocating the MCDRAM heap.
+- *Intel Threaded Building Blocks (TBB)*: Used for memory management of the MCDRAM heap.
 
-mpirun -np 72 -env LD_PRELOAD ./libhbm.so -env HBM_SIZE 100 -env HBM_THRESHOLD 64 ./mpihello
+Note: This could be updated for any other compiler provided the dependencies are met.
+
+** Usage
+
+This library is only meant for single threaded MPI applications.  The memory allocation to MCDRAM is not thread-safe.  Here are the environment variables that control the operation:
+
+|----------------------+-----------------------------------------------|
+| Environment variable | Description                                   |
+|----------------------+-----------------------------------------------|
+| HBM_SIZE             | The size of the heap in MB.                   |
+| HBM_THRESHOLD        | The threshold in KB for allocating to MCDRAM. |
+|----------------------+-----------------------------------------------|
+
+A suitable value for the threshold would be 16KB.  The intention here is to keep the heap from fragmenting as well as aggregating the memory bandwidth of both types of memory.
+
+The HBM_SIZE should be the amount of MCDRAM shared between the number of ranks.  E.g. for a Xeon Phi 7250 with 16GB MCDRAM, 68 cores and running 1 rank per core, this would be:
+
+#+begin_src bash
+HBM_SIZE=$(echo "16000 / 68" | bc)
+#+end_src
+
+Note: OpenFOAM allocated an MPI buffer where the size can be controlled with =MPI_BUFFER_SIZE=.  This will usually end up using the MCDRAM as is almost certainly above the threshold value.  This should be set to a low value to avoid using all the MCDRAM for this buffer (which is not even used for many of the solvers).  Try setting it to 1000000 (1MB).
+
+The library can be used included with LD_PRELOAD so that no relinking is required.  An MPI application with Intel MPI can be launched as follows:
+
+#+begin_src bash
+mpirun -np 68 -env LD_PRELOAD /path/to/libhbm.so -env HBM_SIZE 100 -env HBM_THRESHOLD 16 -env MPI_BUFFER_SIZE 1000000 ./myapplication
+#+end_src
+
 
