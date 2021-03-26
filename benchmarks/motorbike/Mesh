@@ -1,6 +1,9 @@
 #!/bin/sh
 cd ${0%/*} || exit 1    # run from this directory
 
+# Source tutorial run functions
+. $WM_PROJECT_DIR/bin/tools/RunFunctions
+
 NX=$1
 NY=$2
 NZ=$3
@@ -11,24 +14,47 @@ echo "Setting up with $NPROCS procs.  Blockmesh size = $NX x $NY x $NZ"
 
 mkdir -p constant/polyMesh
 mkdir -p constant/triSurface
+ln -s triSurface constant/geometry
 
-sed "s/NX/$NX/g;s/NY/$NY/g;s/NZ/$NZ/g" system/blockMeshDict-mesh.in > constant/polyMesh/blockMeshDict
-cp system/decomposeParDict-mesh.in system/decomposeParDict
-
-# Source tutorial run functions
-. $WM_PROJECT_DIR/bin/tools/RunFunctions
+sed "s/NX/$NX/g;s/NY/$NY/g;s/NZ/$NZ/g" system/blockMeshDict-mesh.in > system/blockMeshDict
+cp -f system/decomposeParDict-mesh.in system/decomposeParDict
 
 # copy motorbike surface from resources directory
-cp $FOAM_TUTORIALS/resources/geometry/motorBike.obj.gz constant/triSurface/
-runApplication surfaceFeatureExtract
+cp -f $FOAM_TUTORIALS/resources/geometry/motorBike.obj.gz constant/triSurface/
+cp -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/meshQualityDict system/
+cp -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/cuttingPlane system/
+cp -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/forceCoeffs system/
+cp -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/streamLines system/
+cp -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/snappyHexMeshDict system/
+cp -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/controlDict system/
+
+# This will make total number of cells limit to 50000000(50M)
+# If you need to create mesh larger than 50M, then increase this value
+foamDictionary -entry "castellatedMeshControls.maxGlobalCells" -set "50000000" system/snappyHexMeshDict
+# This will reduce number of iteration from 500 to 250
+foamDictionary -entry "endTime" -set "250" system/controlDict
+# This will prevent writing some files and removes I/O activity
+foamDictionary -entry "writeInterval" -set "500" system/controlDict
+# This will prevent some diagnostic function calls during the run
+sed -i "s@#include@// #include@g" system/controlDict
+
+surface=$(which surfaceFeatureExtract)
+if [ ! -x $surface ]; then
+ surface=$(which surfaceFeatures)
+fi
+
+runApplication $(basename surface)
 
 runApplication blockMesh
 
 runApplication decomposePar
+
 runParallel snappyHexMesh -overwrite
+#mpirun -n $NPROCS snappyHexMesh -overwrite -parallel
 
 runApplication reconstructParMesh -constant
 rm -rf processor*
 
+# This is optional. This may improve performance and may cause more unstable result for some cases
 runApplication renumberMesh -constant -overwrite
 

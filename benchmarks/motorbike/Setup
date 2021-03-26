@@ -1,19 +1,17 @@
 #!/bin/sh
 cd ${0%/*} || exit 1    # run from this directory
 
+# Source tutorial run functions
+. $WM_PROJECT_DIR/bin/tools/RunFunctions
+
 NPROCS=$1
 
 echo "Running with $NPROCS procs."
 
-rm -f log.*
-rm -rf processor*
-
 sed "s/NPROCS/$NPROCS/g" system/decomposeParDict-solve.in > system/decomposeParDict
 
-# Source tutorial run functions
-. $WM_PROJECT_DIR/bin/tools/RunFunctions
-
-runApplication decomposePar
+rm -rf processor*
+runApplication -a decomposePar
 
 #- For non-parallel running
 #cp -r 0.org 0 > /dev/null 2>&1
@@ -22,6 +20,10 @@ runApplication decomposePar
 ls -d processor* | xargs -I {} rm -rf ./{}/0
 ls -d processor* | xargs -I {} cp -r 0.org ./{}/0
 
+runParallel checkMesh
+#mpirun -n $NPROCS checkMesh -parallel
+
 runParallel potentialFoam
+#mpirun -n $NPROCS potentialFoam -parallel
 
 # ----------------------------------------------------------------- end-of-file
