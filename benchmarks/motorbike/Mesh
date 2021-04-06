@@ -27,13 +27,18 @@ cp -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/forceCoeffs sys
 cp -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/streamLines system/
 cp -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/snappyHexMeshDict system/
 cp -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/controlDict system/
+if [ -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/surfaceFeaturesDict ]; then
+    cp -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/surfaceFeaturesDict system/
+elif [ -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/surfaceFeatureExtractDict ]; then
+    cp -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/surfaceFeatureExtractDict system/
+fi
 
-# This will make total number of cells limit to 50000000(50M)
+# This will limit global number of cell to 50000000(50M)
 # If you need to create mesh larger than 50M, then increase this value
 foamDictionary -entry "castellatedMeshControls.maxGlobalCells" -set "50000000" system/snappyHexMeshDict
 # This will reduce number of iteration from 500 to 250
 foamDictionary -entry "endTime" -set "250" system/controlDict
-# This will prevent writing some files and removes I/O activity
+# This will prevent writing some files and removes I/O activity during the run
 foamDictionary -entry "writeInterval" -set "500" system/controlDict
 # This will prevent some diagnostic function calls during the run
 sed -i "s@#include@// #include@g" system/controlDict
