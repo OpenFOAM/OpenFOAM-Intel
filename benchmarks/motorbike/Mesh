@@ -14,7 +14,9 @@ echo "Setting up with $NPROCS procs.  Blockmesh size = $NX x $NY x $NZ"
 
 mkdir -p constant/polyMesh
 mkdir -p constant/triSurface
-ln -s triSurface constant/geometry
+if [ ! -f constant/geometry ]; then
+    ln -s triSurface constant/geometry
+fi
 
 sed "s/NX/$NX/g;s/NY/$NY/g;s/NZ/$NZ/g" system/blockMeshDict-mesh.in > system/blockMeshDict
 cp -f system/decomposeParDict-mesh.in system/decomposeParDict
@@ -29,8 +31,10 @@ cp -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/snappyHexMeshDi
 cp -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/controlDict system/
 if [ -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/surfaceFeaturesDict ]; then
     cp -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/surfaceFeaturesDict system/
+    surface=$(which surfaceFeatures)
 elif [ -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/surfaceFeatureExtractDict ]; then
     cp -f $FOAM_TUTORIALS/incompressible/simpleFoam/motorBike/system/surfaceFeatureExtractDict system/
+    surface=$(which surfaceFeatureExtract)
 fi
 
 # This will limit global number of cell to 50000000(50M)
@@ -43,12 +47,7 @@ foamDictionary -entry "writeInterval" -set "500" system/controlDict
 # This will prevent some diagnostic function calls during the run
 sed -i "s@#include@// #include@g" system/controlDict
 
-surface=$(which surfaceFeatureExtract)
-if [ ! -x $surface ]; then
- surface=$(which surfaceFeatures)
-fi
-
-runApplication $(basename surface)
+runApplication $(basename $surface)
 
 runApplication blockMesh
 
