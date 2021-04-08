@@ -18,6 +18,9 @@ Here is an example of the sizes of mesh that are created for different values:
 |    80 |    32 |    32 |    11.2  |
 |    90 |    36 |    36 |    15.5  |
 |   100 |    40 |    40 |    20    |
+|   130 |    52 |    52 |    42    |
+|   150 |    60 |    60 |    64    |
+|   200 |    80 |    80 |   145    |
 |-------+-------+-------+----------|
 
 It is recommended to keep the same proportions here.

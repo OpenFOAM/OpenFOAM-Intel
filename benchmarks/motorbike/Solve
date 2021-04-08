@@ -9,5 +9,6 @@ cd ${0%/*} || exit 1    # run from this directory
 #           mpirun -np $NPROCS simpleFoam -parallel
 #
 runParallel simpleFoam
+#mpirun -n $(getNumberOfProcessors) simpleFoam -parallel
 
 # ----------------------------------------------------------------- end-of-file
